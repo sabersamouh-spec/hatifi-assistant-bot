@@ -2,6 +2,8 @@ import os
 import threading
 import requests
 
+from urllib.parse import urlparse, parse_qs
+
 from flask import Flask
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
@@ -12,6 +14,7 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+
 
 # ============================================================
 # CONFIG
@@ -37,7 +40,10 @@ def home():
 
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
-    web_app.run(host="0.0.0.0", port=port)
+    web_app.run(
+        host="0.0.0.0",
+        port=port
+    )
 
 
 # ============================================================
@@ -54,14 +60,9 @@ main_keyboard = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
-cancel_keyboard = ReplyKeyboardMarkup(
-    [["❌ Cancel"]],
-    resize_keyboard=True,
-)
-
 
 # ============================================================
-# CONVERSATION STATES
+# STATES
 # ============================================================
 
 (
@@ -73,18 +74,21 @@ cancel_keyboard = ReplyKeyboardMarkup(
 
 
 # ============================================================
-# API
+# API REQUEST
 # ============================================================
 
 def api_request(params):
+
     params = dict(params)
+
     params["api_key"] = IPTV_API_KEY
 
     try:
+
         response = requests.get(
             API_URL,
             params=params,
-            timeout=30,
+            timeout=30
         )
 
         response.raise_for_status()
@@ -95,14 +99,55 @@ def api_request(params):
         except Exception:
             return {
                 "status": "false",
-                "message": response.text,
+                "message": response.text
             }
 
     except Exception as error:
+
         return {
             "status": "false",
-            "message": str(error),
+            "message": str(error)
         }
+
+
+# ============================================================
+# EXTRACT USERNAME + PASSWORD FROM M3U URL
+# ============================================================
+
+def extract_m3u_credentials(url):
+
+    username = None
+    password = None
+
+    if not url:
+        return username, password
+
+    try:
+
+        parsed_url = urlparse(url)
+
+        query = parse_qs(
+            parsed_url.query
+        )
+
+        username_values = query.get(
+            "username"
+        )
+
+        password_values = query.get(
+            "password"
+        )
+
+        if username_values:
+            username = username_values[0]
+
+        if password_values:
+            password = password_values[0]
+
+    except Exception:
+        pass
+
+    return username, password
 
 
 # ============================================================
@@ -111,13 +156,14 @@ def api_request(params):
 
 async def start(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
+    context: ContextTypes.DEFAULT_TYPE
 ):
+
     await update.message.reply_text(
         "📺 Hatifi IPTV Bot\n\n"
         "👋 مرحبا\n"
         "اختار العملية:",
-        reply_markup=main_keyboard,
+        reply_markup=main_keyboard
     )
 
 
@@ -127,33 +173,41 @@ async def start(
 
 async def credits(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
+    context: ContextTypes.DEFAULT_TYPE
 ):
-    data = api_request(
-        {
-            "action": "reseller",
-        }
-    )
 
-    if isinstance(data, dict) and str(
-        data.get("status")
-    ).lower() == "true":
+    data = api_request({
+        "action": "reseller"
+    })
 
-        username = data.get("username", "-")
-        credit_value = data.get("credits", "0")
+    if (
+        isinstance(data, dict)
+        and str(data.get("status")).lower() == "true"
+    ):
+
+        username = data.get(
+            "username",
+            "-"
+        )
+
+        credit_value = data.get(
+            "credits",
+            "0"
+        )
 
         await update.message.reply_text(
             "✅ الحساب متصل\n\n"
             f"👤 Username: {username}\n"
             f"💰 Credits: {credit_value}",
-            reply_markup=main_keyboard,
+            reply_markup=main_keyboard
         )
 
     else:
+
         await update.message.reply_text(
             "❌ خطأ في الاتصال بالـ API\n\n"
             f"{data}",
-            reply_markup=main_keyboard,
+            reply_markup=main_keyboard
         )
 
 
@@ -162,21 +216,22 @@ async def credits(
 # ============================================================
 
 def get_packages():
-    data = api_request(
-        {
-            "action": "bouquet",
-        }
-    )
+
+    data = api_request({
+        "action": "bouquet"
+    })
 
     if isinstance(data, list):
         return data
 
     if isinstance(data, dict):
+
         for key in [
             "packages",
             "bouquets",
-            "data",
+            "data"
         ]:
+
             value = data.get(key)
 
             if isinstance(value, list):
@@ -187,22 +242,36 @@ def get_packages():
 
 async def packages(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
+    context: ContextTypes.DEFAULT_TYPE
 ):
+
     pack_list = get_packages()
 
     if not pack_list:
+
         await update.message.reply_text(
             "❌ ماقدرتش نجيب Packages.",
-            reply_markup=main_keyboard,
+            reply_markup=main_keyboard
         )
+
         return
 
-    lines = ["📦 Packages:", ""]
+    lines = [
+        "📦 Packages:",
+        ""
+    ]
 
     for pack in pack_list:
-        pack_id = pack.get("id", "-")
-        pack_name = pack.get("name", "-")
+
+        pack_id = pack.get(
+            "id",
+            "-"
+        )
+
+        pack_name = pack.get(
+            "name",
+            "-"
+        )
 
         lines.append(
             f"📦 {pack_name} — ID: {pack_id}"
@@ -210,141 +279,173 @@ async def packages(
 
     await update.message.reply_text(
         "\n".join(lines),
-        reply_markup=main_keyboard,
+        reply_markup=main_keyboard
     )
 
 
 # ============================================================
-# NEW M3U - STEP 1
+# NEW M3U
+# STEP 1 - PACKAGE
 # ============================================================
 
 async def new_m3u_start(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
+    context: ContextTypes.DEFAULT_TYPE
 ):
+
     pack_list = get_packages()
 
     if not pack_list:
+
         await update.message.reply_text(
-            "❌ ماقدرتش نجيب لائحة Packages.",
-            reply_markup=main_keyboard,
+            "❌ ماقدرتش نجيب Packages.",
+            reply_markup=main_keyboard
         )
 
         return ConversationHandler.END
 
-    context.user_data["packages"] = pack_list
-
     buttons = []
 
     for pack in pack_list:
-        pack_id = str(pack.get("id", ""))
-        pack_name = str(pack.get("name", ""))
 
-        buttons.append(
-            [f"{pack_name} | {pack_id}"]
+        pack_id = str(
+            pack.get("id", "")
         )
 
-    buttons.append(["❌ Cancel"])
+        pack_name = str(
+            pack.get("name", "")
+        )
+
+        buttons.append([
+            f"{pack_name} | {pack_id}"
+        ])
+
+    buttons.append([
+        "❌ Cancel"
+    ])
 
     keyboard = ReplyKeyboardMarkup(
         buttons,
-        resize_keyboard=True,
+        resize_keyboard=True
     )
 
     await update.message.reply_text(
         "➕ New M3U\n\n"
         "📦 اختار Package:",
-        reply_markup=keyboard,
+        reply_markup=keyboard
     )
 
     return M3U_PACKAGE
 
 
 # ============================================================
-# NEW M3U - STEP 2
+# STEP 2 - DURATION
 # ============================================================
 
 async def new_m3u_package(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
+    context: ContextTypes.DEFAULT_TYPE
 ):
+
     text = update.message.text.strip()
 
     if text == "❌ Cancel":
-        return await cancel(update, context)
+        return await cancel(
+            update,
+            context
+        )
 
     if "|" not in text:
+
         await update.message.reply_text(
             "❌ اختار Package من الأزرار."
         )
+
         return M3U_PACKAGE
 
     try:
-        pack_name, pack_id = text.rsplit("|", 1)
 
-        pack_name = pack_name.strip()
-        pack_id = pack_id.strip()
+        pack_name, pack_id = text.rsplit(
+            "|",
+            1
+        )
 
-        context.user_data["pack_name"] = pack_name
-        context.user_data["pack_id"] = pack_id
+        context.user_data[
+            "pack_name"
+        ] = pack_name.strip()
+
+        context.user_data[
+            "pack_id"
+        ] = pack_id.strip()
 
     except Exception:
+
         await update.message.reply_text(
             "❌ Package غير صحيح."
         )
+
         return M3U_PACKAGE
 
     keyboard = ReplyKeyboardMarkup(
         [
             ["1", "3"],
             ["6", "12"],
-            ["❌ Cancel"],
+            ["❌ Cancel"]
         ],
-        resize_keyboard=True,
+        resize_keyboard=True
     )
 
     await update.message.reply_text(
         "⏳ اختار مدة الاشتراك بالشهور:",
-        reply_markup=keyboard,
+        reply_markup=keyboard
     )
 
     return M3U_DURATION
 
 
 # ============================================================
-# NEW M3U - STEP 3
+# STEP 3 - COUNTRY
 # ============================================================
 
 async def new_m3u_duration(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
+    context: ContextTypes.DEFAULT_TYPE
 ):
+
     duration = update.message.text.strip()
 
     if duration == "❌ Cancel":
-        return await cancel(update, context)
+
+        return await cancel(
+            update,
+            context
+        )
 
     if duration not in [
         "1",
         "3",
         "6",
-        "12",
+        "12"
     ]:
+
         await update.message.reply_text(
             "❌ اختار 1 أو 3 أو 6 أو 12."
         )
+
         return M3U_DURATION
 
-    context.user_data["duration"] = duration
+    context.user_data[
+        "duration"
+    ] = duration
 
     keyboard = ReplyKeyboardMarkup(
         [
             ["MA", "FR"],
             ["ES", "BE"],
             ["ALL"],
-            ["❌ Cancel"],
+            ["❌ Cancel"]
         ],
-        resize_keyboard=True,
+        resize_keyboard=True
     )
 
     await update.message.reply_text(
@@ -353,55 +454,71 @@ async def new_m3u_duration(
         "🇫🇷 FR = France\n"
         "🇪🇸 ES = Spain\n"
         "🇧🇪 BE = Belgium\n"
-        "🌐 ALL = VPN / جميع الدول",
-        reply_markup=keyboard,
+        "🌐 ALL = جميع الدول / VPN",
+        reply_markup=keyboard
     )
 
     return M3U_COUNTRY
 
 
 # ============================================================
-# NEW M3U - STEP 4
+# STEP 4 - CONFIRM
 # ============================================================
 
 async def new_m3u_country(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
+    context: ContextTypes.DEFAULT_TYPE
 ):
-    country = update.message.text.strip().upper()
+
+    country = (
+        update.message.text
+        .strip()
+        .upper()
+    )
 
     if country == "❌ CANCEL":
-        return await cancel(update, context)
 
-    if country != "ALL" and len(country) != 2:
+        return await cancel(
+            update,
+            context
+        )
+
+    if (
+        country != "ALL"
+        and len(country) != 2
+    ):
+
         await update.message.reply_text(
             "❌ دخل Country بحال MA أو FR أو ALL."
         )
+
         return M3U_COUNTRY
 
-    context.user_data["country"] = country
+    context.user_data[
+        "country"
+    ] = country
 
     pack_name = context.user_data.get(
         "pack_name",
-        "-",
+        "-"
     )
 
     pack_id = context.user_data.get(
         "pack_id",
-        "-",
+        "-"
     )
 
     duration = context.user_data.get(
         "duration",
-        "-",
+        "-"
     )
 
     keyboard = ReplyKeyboardMarkup(
         [
             ["✅ Confirm"],
-            ["❌ Cancel"],
+            ["❌ Cancel"]
         ],
-        resize_keyboard=True,
+        resize_keyboard=True
     )
 
     await update.message.reply_text(
@@ -411,69 +528,115 @@ async def new_m3u_country(
         f"⏳ Duration: {duration} month(s)\n"
         f"🌍 Country: {country}\n\n"
         "⚠️ Confirm يمكن يخصم Credits.",
-        reply_markup=keyboard,
+        reply_markup=keyboard
     )
 
     return M3U_CONFIRM
 
 
 # ============================================================
-# NEW M3U - CREATE
+# CREATE M3U
 # ============================================================
 
 async def new_m3u_confirm(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
+    context: ContextTypes.DEFAULT_TYPE
 ):
+
     text = update.message.text.strip()
 
     if text == "❌ Cancel":
-        return await cancel(update, context)
+
+        return await cancel(
+            update,
+            context
+        )
 
     if text != "✅ Confirm":
+
         await update.message.reply_text(
             "اختار ✅ Confirm أو ❌ Cancel."
         )
+
         return M3U_CONFIRM
 
     await update.message.reply_text(
         "⏳ جاري إنشاء M3U..."
     )
 
-    data = api_request(
-        {
-            "action": "new",
-            "type": "m3u",
-            "sub": context.user_data["duration"],
-            "pack": context.user_data["pack_id"],
-            "country": context.user_data["country"],
-            "notes": "Hatifi Telegram Bot",
-        }
-    )
+    data = api_request({
+        "action": "new",
+        "type": "m3u",
+        "sub": context.user_data[
+            "duration"
+        ],
+        "pack": context.user_data[
+            "pack_id"
+        ],
+        "country": context.user_data[
+            "country"
+        ],
+        "notes": "Hatifi Telegram Bot"
+    })
 
-    if isinstance(data, dict) and str(
-        data.get("status")
-    ).lower() == "true":
+    if (
+        isinstance(data, dict)
+        and str(
+            data.get("status")
+        ).lower() == "true"
+    ):
+
+        # -----------------------------------------
+        # GET URL
+        # -----------------------------------------
+
+        m3u_url = (
+            data.get("url")
+            or data.get("m3u")
+            or data.get("link")
+            or data.get("playlist")
+            or ""
+        )
+
+        # -----------------------------------------
+        # TRY DIRECT USERNAME/PASSWORD
+        # -----------------------------------------
 
         username = (
             data.get("username")
             or data.get("user")
-            or "-"
         )
 
         password = (
             data.get("password")
             or data.get("pass")
-            or "-"
         )
 
-        server_url = (
-            data.get("url")
-            or data.get("server")
-            or data.get("m3u")
-            or data.get("link")
-            or ""
+        # -----------------------------------------
+        # IF MISSING -> EXTRACT FROM URL
+        # -----------------------------------------
+
+        url_username, url_password = (
+            extract_m3u_credentials(
+                m3u_url
+            )
         )
+
+        if not username:
+            username = url_username
+
+        if not password:
+            password = url_password
+
+        if not username:
+            username = "-"
+
+        if not password:
+            password = "-"
+
+        # -----------------------------------------
+        # RESULT
+        # -----------------------------------------
 
         result = (
             "✅ M3U CREATED SUCCESSFULLY\n\n"
@@ -487,22 +650,26 @@ async def new_m3u_confirm(
             f"{context.user_data['country']}"
         )
 
-        if server_url:
+        if m3u_url:
+
             result += (
                 "\n\n"
-                f"🔗 URL:\n{server_url}"
+                "🔗 M3U URL:\n"
+                f"{m3u_url}"
             )
 
         await update.message.reply_text(
             result,
             reply_markup=main_keyboard,
+            disable_web_page_preview=True
         )
 
     else:
+
         await update.message.reply_text(
             "❌ فشل إنشاء M3U\n\n"
             f"API response:\n{data}",
-            reply_markup=main_keyboard,
+            reply_markup=main_keyboard
         )
 
     context.user_data.clear()
@@ -516,13 +683,14 @@ async def new_m3u_confirm(
 
 async def cancel(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
+    context: ContextTypes.DEFAULT_TYPE
 ):
+
     context.user_data.clear()
 
     await update.message.reply_text(
         "❌ تم إلغاء العملية.",
-        reply_markup=main_keyboard,
+        reply_markup=main_keyboard
     )
 
     return ConversationHandler.END
@@ -534,32 +702,37 @@ async def cancel(
 
 async def other_buttons(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
+    context: ContextTypes.DEFAULT_TYPE
 ):
+
     text = update.message.text.strip()
 
     if text == "📺 New MAG":
+
         await update.message.reply_text(
             "⏳ New MAG غادي نفعّلوه من بعد.",
-            reply_markup=main_keyboard,
+            reply_markup=main_keyboard
         )
 
     elif text == "🔄 Renew M3U":
+
         await update.message.reply_text(
             "⏳ Renew M3U غادي نفعّلوه من بعد.",
-            reply_markup=main_keyboard,
+            reply_markup=main_keyboard
         )
 
     elif text == "🔄 Renew MAG":
+
         await update.message.reply_text(
             "⏳ Renew MAG غادي نفعّلوه من بعد.",
-            reply_markup=main_keyboard,
+            reply_markup=main_keyboard
         )
 
     elif text == "🔎 Device Info":
+
         await update.message.reply_text(
             "⏳ Device Info غادي نفعّلوه من بعد.",
-            reply_markup=main_keyboard,
+            reply_markup=main_keyboard
         )
 
 
@@ -568,9 +741,10 @@ async def other_buttons(
 # ============================================================
 
 def main():
+
     threading.Thread(
         target=run_web_server,
-        daemon=True,
+        daemon=True
     ).start()
 
     application = (
@@ -579,51 +753,65 @@ def main():
         .build()
     )
 
-    new_m3u_conversation = ConversationHandler(
-        entry_points=[
-            MessageHandler(
-                filters.Regex(r"^➕ New M3U$"),
-                new_m3u_start,
-            )
-        ],
-        states={
-            M3U_PACKAGE: [
+    new_m3u_conversation = (
+        ConversationHandler(
+            entry_points=[
                 MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
-                    new_m3u_package,
+                    filters.Regex(
+                        r"^➕ New M3U$"
+                    ),
+                    new_m3u_start
                 )
             ],
-            M3U_DURATION: [
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
-                    new_m3u_duration,
+
+            states={
+
+                M3U_PACKAGE: [
+                    MessageHandler(
+                        filters.TEXT
+                        & ~filters.COMMAND,
+                        new_m3u_package
+                    )
+                ],
+
+                M3U_DURATION: [
+                    MessageHandler(
+                        filters.TEXT
+                        & ~filters.COMMAND,
+                        new_m3u_duration
+                    )
+                ],
+
+                M3U_COUNTRY: [
+                    MessageHandler(
+                        filters.TEXT
+                        & ~filters.COMMAND,
+                        new_m3u_country
+                    )
+                ],
+
+                M3U_CONFIRM: [
+                    MessageHandler(
+                        filters.TEXT
+                        & ~filters.COMMAND,
+                        new_m3u_confirm
+                    )
+                ]
+            },
+
+            fallbacks=[
+                CommandHandler(
+                    "cancel",
+                    cancel
                 )
-            ],
-            M3U_COUNTRY: [
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
-                    new_m3u_country,
-                )
-            ],
-            M3U_CONFIRM: [
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
-                    new_m3u_confirm,
-                )
-            ],
-        },
-        fallbacks=[
-            CommandHandler(
-                "cancel",
-                cancel,
-            )
-        ],
+            ]
+        )
     )
 
     application.add_handler(
         CommandHandler(
             "start",
-            start,
+            start
         )
     )
 
@@ -633,26 +821,33 @@ def main():
 
     application.add_handler(
         MessageHandler(
-            filters.Regex(r"^💰 Credits$"),
-            credits,
+            filters.Regex(
+                r"^💰 Credits$"
+            ),
+            credits
         )
     )
 
     application.add_handler(
         MessageHandler(
-            filters.Regex(r"^📦 Packages$"),
-            packages,
+            filters.Regex(
+                r"^📦 Packages$"
+            ),
+            packages
         )
     )
 
     application.add_handler(
         MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            other_buttons,
+            filters.TEXT
+            & ~filters.COMMAND,
+            other_buttons
         )
     )
 
-    print("Hatifi IPTV Bot started")
+    print(
+        "Hatifi IPTV Bot started"
+    )
 
     application.run_polling(
         drop_pending_updates=True
