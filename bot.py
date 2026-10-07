@@ -1,14 +1,15 @@
 import os
-import threading
 import requests
 from flask import Flask
+from threading import Thread
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
-    Application,
+    ApplicationBuilder,
     CommandHandler,
-    CallbackQueryHandler,
+    MessageHandler,
     ContextTypes,
+    filters,
 )
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
@@ -16,191 +17,107 @@ IPTV_API_KEY = os.environ["IPTV_API_KEY"]
 
 API_URL = "https://4k.online-cms.ru/api/api.php"
 
-# ---------------- WEB SERVER FOR RENDER ----------------
-
-web_app = Flask(__name__)
+app = Flask(__name__)
 
 
-@web_app.route("/")
+@app.route("/")
 def home():
     return "Hatifi IPTV Bot is running ✅"
 
 
 def run_web():
     port = int(os.environ.get("PORT", 10000))
-    web_app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port)
 
 
-# ---------------- IPTV API ----------------
-
-def api_request(**params):
-    params["api_key"] = IPTV_API_KEY
-
-    response = requests.get(
-        API_URL,
-        params=params,
-        timeout=20
-    )
-
-    response.raise_for_status()
-    return response.json()
-
-
-# ---------------- TELEGRAM MENU ----------------
-
-def main_menu():
-    keyboard = [
-        [
-            InlineKeyboardButton("➕ New M3U", callback_data="new_m3u"),
-            InlineKeyboardButton("📺 New MAG", callback_data="new_mag"),
-        ],
-        [
-            InlineKeyboardButton("🔄 Renew M3U", callback_data="renew_m3u"),
-            InlineKeyboardButton("🔄 Renew MAG", callback_data="renew_mag"),
-        ],
-        [
-            InlineKeyboardButton("🔎 Device Info", callback_data="device_info"),
-            InlineKeyboardButton("📦 Packages", callback_data="packages"),
-        ],
-        [
-            InlineKeyboardButton("💰 Credits", callback_data="credits"),
-        ],
-    ]
-
-    return InlineKeyboardMarkup(keyboard)
+keyboard = [
+    ["➕ New M3U", "📺 New MAG"],
+    ["🔄 Renew M3U", "🔄 Renew MAG"],
+    ["🔎 Device Info", "📦 Packages"],
+    ["💰 Credits"],
+]
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     await update.message.reply_text(
         "📺 Hatifi IPTV Bot\n\n"
-        "مرحبا 👋\n"
+        "👋 مرحبا\n"
         "اختار العملية:",
-        reply_markup=main_menu()
+        reply_markup=ReplyKeyboardMarkup(
+            keyboard,
+            resize_keyboard=True
+        ),
     )
 
 
-async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    query = update.callback_query
-    await query.answer()
-
+async def credits(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
+        response = requests.get(
+            API_URL,
+            params={
+                "action": "reseller",
+                "api_key": IPTV_API_KEY,
+            },
+            timeout=20,
+        )
 
-        if query.data == "credits":
+        data = response.json()
 
-            data = api_request(action="reseller")
+        if str(data.get("status")).lower() == "true":
+            username = data.get("username", "-")
+            credits_value = data.get("credits", "-")
 
-            if isinstance(data, list) and data:
-                info = data[0]
-
-                text = (
-                    "💰 Reseller Info\n\n"
-                    f"👤 Username: {info.get('username', '-')}\n"
-                    f"💳 Credits: {info.get('credits', '-')}\n"
-                    f"✅ Enabled: {info.get('enabled', '-')}"
-                )
-
-            else:
-                text = f"❌ API response:\n{data}"
-
-            await query.edit_message_text(
-                text,
-                reply_markup=main_menu()
+            await update.message.reply_text(
+                f"✅ الحساب متصل\n\n"
+                f"👤 Username: {username}\n"
+                f"💰 Credits: {credits_value}"
             )
-
-        elif query.data == "packages":
-
-            data = api_request(action="bouquet")
-
-            if not isinstance(data, list) or not data:
-
-                await query.edit_message_text(
-                    "❌ ما لقيت حتى Package.",
-                    reply_markup=main_menu()
-                )
-                return
-
-            text = "📦 IPTV Packages\n\n"
-
-            for package in data:
-                text += (
-                    f"📺 {package.get('name', '-')}\n"
-                    f"ID: {package.get('id', '-')}\n\n"
-                )
-
-            await query.edit_message_text(
-                text[:4000],
-                reply_markup=main_menu()
-            )
-
-        elif query.data == "new_m3u":
-
-            await query.edit_message_text(
-                "➕ New M3U\n\n"
-                "قريباً: اختيار Package والمدة.",
-                reply_markup=main_menu()
-            )
-
-        elif query.data == "new_mag":
-
-            await query.edit_message_text(
-                "📺 New MAG\n\n"
-                "قريباً: MAC + Package + المدة.",
-                reply_markup=main_menu()
-            )
-
-        elif query.data == "renew_m3u":
-
-            await query.edit_message_text(
-                "🔄 Renew M3U\n\n"
-                "قريباً: Username + Password + المدة.",
-                reply_markup=main_menu()
-            )
-
-        elif query.data == "renew_mag":
-
-            await query.edit_message_text(
-                "🔄 Renew MAG\n\n"
-                "قريباً: MAC + المدة.",
-                reply_markup=main_menu()
-            )
-
-        elif query.data == "device_info":
-
-            await query.edit_message_text(
-                "🔎 Device Info\n\n"
-                "قريباً: البحث بـ M3U أو MAC.",
-                reply_markup=main_menu()
+        else:
+            await update.message.reply_text(
+                f"❌ API response:\n{data}"
             )
 
     except Exception as e:
-
-        await query.edit_message_text(
-            f"❌ Error:\n{e}",
-            reply_markup=main_menu()
+        await update.message.reply_text(
+            f"❌ Error:\n{e}"
         )
 
 
-# ---------------- START BOT ----------------
+async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+
+    if text == "💰 Credits":
+        await credits(update, context)
+
+    elif text == "➕ New M3U":
+        await update.message.reply_text("⏳ New M3U غادي نفعّلوه فالمرحلة الجاية.")
+
+    elif text == "📺 New MAG":
+        await update.message.reply_text("⏳ New MAG غادي نفعّلوه فالمرحلة الجاية.")
+
+    elif text == "🔄 Renew M3U":
+        await update.message.reply_text("⏳ Renew M3U غادي نفعّلوه فالمرحلة الجاية.")
+
+    elif text == "🔄 Renew MAG":
+        await update.message.reply_text("⏳ Renew MAG غادي نفعّلوه فالمرحلة الجاية.")
+
+    elif text == "🔎 Device Info":
+        await update.message.reply_text("⏳ Device Info غادي نفعّلوه فالمرحلة الجاية.")
+
+    elif text == "📦 Packages":
+        await update.message.reply_text("⏳ Packages غادي نفعّلوه فالمرحلة الجاية.")
+
 
 def main():
+    Thread(target=run_web, daemon=True).start()
 
-    threading.Thread(
-        target=run_web,
-        daemon=True
-    ).start()
+    bot = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
-    print("Starting Hatifi IPTV Bot...")
+    bot.add_handler(CommandHandler("start", start))
+    bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, buttons))
 
-    app = Application.builder().token(
-        TELEGRAM_BOT_TOKEN
-    ).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(menu))
-
-    app.run_polling()
+    print("Hatifi IPTV Bot started")
+    bot.run_polling()
 
 
 if __name__ == "__main__":
