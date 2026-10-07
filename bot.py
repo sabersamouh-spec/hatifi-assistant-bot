@@ -1,5 +1,7 @@
 import os
+import threading
 import requests
+from flask import Flask
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -9,12 +11,27 @@ from telegram.ext import (
     ContextTypes,
 )
 
-# Secrets from Render
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 IPTV_API_KEY = os.environ["IPTV_API_KEY"]
 
 API_URL = "https://4k.online-cms.ru/api/api.php"
 
+# ---------------- WEB SERVER FOR RENDER ----------------
+
+web_app = Flask(__name__)
+
+
+@web_app.route("/")
+def home():
+    return "Hatifi IPTV Bot is running ✅"
+
+
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    web_app.run(host="0.0.0.0", port=port)
+
+
+# ---------------- IPTV API ----------------
 
 def api_request(**params):
     params["api_key"] = IPTV_API_KEY
@@ -28,6 +45,8 @@ def api_request(**params):
     response.raise_for_status()
     return response.json()
 
+
+# ---------------- TELEGRAM MENU ----------------
 
 def main_menu():
     keyboard = [
@@ -52,6 +71,7 @@ def main_menu():
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     await update.message.reply_text(
         "📺 Hatifi IPTV Bot\n\n"
         "مرحبا 👋\n"
@@ -61,17 +81,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     query = update.callback_query
     await query.answer()
 
     try:
 
-        # Credits
         if query.data == "credits":
 
             data = api_request(action="reseller")
 
-            if isinstance(data, list) and len(data) > 0:
+            if isinstance(data, list) and data:
                 info = data[0]
 
                 text = (
@@ -89,12 +109,12 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=main_menu()
             )
 
-        # Packages
         elif query.data == "packages":
 
             data = api_request(action="bouquet")
 
-            if not isinstance(data, list) or len(data) == 0:
+            if not isinstance(data, list) or not data:
+
                 await query.edit_message_text(
                     "❌ ما لقيت حتى Package.",
                     reply_markup=main_menu()
@@ -114,59 +134,45 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=main_menu()
             )
 
-        # New M3U
         elif query.data == "new_m3u":
 
             await query.edit_message_text(
                 "➕ New M3U\n\n"
-                "هاد الزر خدام ✅\n"
-                "غادي نضيفو ليه اختيار Package والمدة.",
+                "قريباً: اختيار Package والمدة.",
                 reply_markup=main_menu()
             )
 
-        # New MAG
         elif query.data == "new_mag":
 
             await query.edit_message_text(
                 "📺 New MAG\n\n"
-                "هاد الزر خدام ✅\n"
-                "غادي نضيفو إدخال MAC + Package + المدة.",
+                "قريباً: MAC + Package + المدة.",
                 reply_markup=main_menu()
             )
 
-        # Renew M3U
         elif query.data == "renew_m3u":
 
             await query.edit_message_text(
                 "🔄 Renew M3U\n\n"
-                "غادي نضيفو Username + Password + مدة التجديد.",
+                "قريباً: Username + Password + المدة.",
                 reply_markup=main_menu()
             )
 
-        # Renew MAG
         elif query.data == "renew_mag":
 
             await query.edit_message_text(
                 "🔄 Renew MAG\n\n"
-                "غادي نضيفو MAC + مدة التجديد.",
+                "قريباً: MAC + المدة.",
                 reply_markup=main_menu()
             )
 
-        # Device Info
         elif query.data == "device_info":
 
             await query.edit_message_text(
                 "🔎 Device Info\n\n"
-                "غادي نضيفو البحث بـ M3U أو MAC.",
+                "قريباً: البحث بـ M3U أو MAC.",
                 reply_markup=main_menu()
             )
-
-    except requests.RequestException as e:
-
-        await query.edit_message_text(
-            f"❌ خطأ في الاتصال بالـ IPTV API:\n{e}",
-            reply_markup=main_menu()
-        )
 
     except Exception as e:
 
@@ -176,7 +182,14 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+# ---------------- START BOT ----------------
+
 def main():
+
+    threading.Thread(
+        target=run_web,
+        daemon=True
+    ).start()
 
     print("Starting Hatifi IPTV Bot...")
 
@@ -184,15 +197,8 @@ def main():
         TELEGRAM_BOT_TOKEN
     ).build()
 
-    app.add_handler(
-        CommandHandler("start", start)
-    )
-
-    app.add_handler(
-        CallbackQueryHandler(menu)
-    )
-
-    print("Bot is running.")
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(menu))
 
     app.run_polling()
 
